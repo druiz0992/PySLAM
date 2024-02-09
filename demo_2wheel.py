@@ -1,18 +1,16 @@
 import numpy as np
+from time import sleep
 
 # Simulation + plotting requires a robot, visualizer and world
 from simulator.robots import TwoWheeledRobot
-from simulator.world import World, WorldObject
+from simulator.world import World
 from simulator import sample_motion_plan
 
 # Supported resampling methods (resampling algorithm enum for SIR and SIR-derived particle filters)
 from core.resampling import ResamplingAlgorithms
 
 # Particle filters
-from core.particle_filters import ParticleFilterNEPR,ParticleFilterSIR
-
-# For showing plots (plt.show())
-import matplotlib.pyplot as plt
+from core.particle_filters import ParticleFilterNEPR
 
 if __name__ == '__main__':
 
@@ -24,8 +22,8 @@ if __name__ == '__main__':
     ##
     # World settings
     ##
-    world_size_x = 10.0
-    world_size_y = 10.0
+    world_size_x = 100.0
+    world_size_y = 100.0
     n_landmarks = 4 
 
     ##
@@ -52,7 +50,8 @@ if __name__ == '__main__':
     robot_params = {
         'wheel_distance': true_wheel_distance_cm,
         'wheel_diameter': true_wheel_diameter_cm,
-        'skip_angle_measurement': skip_angle_measurement
+        'skip_angle_measurement': skip_angle_measurement,
+        'world_size': [world_size_x, world_size_y]
     }
 
     robot_noise_params = {
@@ -121,28 +120,35 @@ if __name__ == '__main__':
     world_opts = {
         'world_size': [world_size_x, world_size_y],
         'n_landmarks': n_landmarks,
-        'world_type': 'maze', #'reference_landmarks'
+        'world_type': 'reference_landmarks', #'maze', #'reference_landmarks'
+        'grid_scale': [10,10]
     }
 
     world = World(world_opts, visualizer_opts)
-    reference_landmarks = world.landmarks.get_landmarks()[4:]
-    reference_landmarks_coordinates = [landmark.get_center() for landmark in reference_landmarks]
 
-    # check that the robot is not inside a landmark. If it is, select a new starting pose and check again
-    while any([landmark.contains_point(robot.get_pose()[:2]) for landmark in reference_landmarks]):
-        robot.set_initial_pose([np.random.uniform(1, world_size_x-2), np.random.uniform(1, world_size_y-2), np.random.uniform(0, 2 * np.pi)])
+    # Initialize grid in robot. It is used to ensure robot doesnt go through walls
+    robot.initialize_grid(world.grid(), update_pose_if_collision=True)
 
-    particle_filter.initialize_particles_gaussian(robot.get_pose(), [meas_model_distance_std, meas_model_distance_std, meas_model_angle_std])
+    reference_landmarks = world.landmarks_as_list()[4:]
+    reference_landmarks_coordinates = [landmark.center() for landmark in reference_landmarks]
+
+    # Initialize particles taking into account the initial robot pose, the process noise and the world grid
+    # to prevent creating particles inside walls
+    particle_filter.initialize_particles_gaussian(
+        robot.get_pose(), 
+        [meas_model_distance_std, meas_model_distance_std, meas_model_angle_std],
+        world_grid = world.grid())
 
     ##
     # Start simulation
     ##
     timestamp = 0
+    
     for motion in true_motion_plan:
         # Simulate robot motion (required motion will not exactly be achieved)
         desired_Lrpm = motion[0]
         desired_Rrpm = motion[1]
-        robot.move([desired_Lrpm, desired_Rrpm], world, timestamp)
+        robot.move([desired_Lrpm, desired_Rrpm], timestamp)
 
         raw_movement = robot.get_raw_incremental_movement()
 
@@ -159,9 +165,9 @@ if __name__ == '__main__':
         robot.set_estimated_pose(estimated_pose)
 
         # Visualization
-        world.draw_world(robot.get_pose(), particle_filter.particles, robot.get_trajectory())
+        world.render(robot.get_pose(), particle_filter.particles, robot.get_trajectory())
         timestamp += sampling_time
-        plt.pause(sampling_time)
+        sleep(sampling_time)
 
     error = robot.measure_error()
     print("Error: ", error)

@@ -27,8 +27,7 @@ class Visualizer:
         self.particle_color = opts['particle_color']
         self.landmark_vertices = landmark_vertices
 
-
-    def draw_world(self, robot_pose, particles, trajectory=None):
+    def render(self, robot_pose, particles, trajectory=None):
         """
         Draw the simulated world with its landmarks, the robot 2D pose and the particles that represent the discrete
         probability distribution that estimates the robot pose.

@@ -23,39 +23,30 @@ class Particles:
         """
         return self.states.shape[1]
 
-    def init_uniform(self, limits):
+    def init_from_distribution(self, old_states, valid_particles,  world_grid = None):
         """
-        Initialize the particles uniformly over the world. The limits are given as a list with maximum and minimum values
+        Initialize the particles using the given initialization function.
 
-        :param limits: List with maximum and minimum values state dimensions: [xmin, xmax, ymin, ymax, zmin, zmax,...]
-
-        NOTE: The number of elements in the limits vector must be equal to 2*state_dimension.
+        :param init_function: Initialization function
+        :param number_of_particles: Number of particles
         """
-        if len(limits)//2 != self.get_state_dimensions():
-            print("Limits vector has incorrect length")
-            sys.exit(1)
+        vp_cntr = valid_particles
 
-        self.weights = np.ones(self.number_of_particles) / self.number_of_particles
-        for i in range(len(limits) // 2):
-            self.states[:, i] = np.random.uniform(limits[2*i], limits[2*i+1])
+        # Need to generate particles until we have the correct number of valid particles, taking into account
+        # the world grid
+        if world_grid is None:
+            self.states = old_states
+            return self.number_of_particles
+        else:
+            collision_particles_mask = world_grid.is_occupied(old_states[:,:2], world_coordinates=True)
+            vp = np.sum(collision_particles_mask == False)
+            elements_to_copy = min(vp,self.number_of_particles-vp_cntr)
+            tmp = old_states[collision_particles_mask == False]
+            self.states[vp_cntr:vp_cntr+elements_to_copy] = tmp[:elements_to_copy, :]
+            vp_cntr += vp
+            return vp_cntr
 
-    def init_gaussian(self, mean, std):
-        """
-        Initialize the particles using a Gaussian distribution. The mean and standard deviation are given as lists.
 
-        :param mean: Mean of the Gaussian distribution used for initializing the particle states
-        :param std: Standard deviations (one for each dimension)
-
-        NOTE: The number of elements in the mean and std vectors must be equal to the state dimension.
-        """
-        state_dimensions = self.get_state_dimensions()
-        if len(mean) != state_dimensions or len(std) != state_dimensions:
-            print("Std/Mean vectors have incorrect length")
-            sys.exit(1)
-
-        self.weights = np.ones(self.number_of_particles) / self.number_of_particles
-        for i in range(self.get_state_dimensions()):
-            self.states[:, i] = np.random.normal(mean[i], std[i], self.number_of_particles)
 
     def sum_weights(self):
         """
@@ -107,6 +98,12 @@ class Particles:
     def get_states(self):
         return self.states
     
+    def set_states(self, states):
+        self.states = states
+    
+    def set_weights(self, weights):
+        self.weights = weights
+    
     def get_number_particles(self):
         return self.number_of_particles
     
@@ -148,6 +145,8 @@ class ParticleFilter:
 
         self.particles = Particles(self.n_particles, self.state_dimension)
 
+        self.world_grid = None
+
     def get_particle_states(self):
         """
         Return particle states.
@@ -172,15 +171,25 @@ class ParticleFilter:
         """
         return self.particles.get()
 
-    def initialize_particles_uniform(self):
+    def initialize_particles_uniform(self, world_grid = None ):
         """
         Initialize the particles uniformly over the world assuming a 3D state (x, y, heading). No arguments are required
         and function always succeeds hence no return value.
         """
-        # Initialize particles with uniform weight distribution
-        self.particles.init_uniform([self.x_min, self.x_max, self.y_min, self.y_max, 0, 2 * np.pi])
+        if world_grid is not None:
+            self.world_grid = world_grid
 
-    def initialize_particles_gaussian(self, mean_vector, standard_deviation_vector):
+        # Initialize particles with uniform weight distribution
+        limits = [self.x_min, self.x_max, self.y_min, self.y_max, 0, 2 * np.pi]
+        s = np.zeros((self.n_particles, self.state_dimension))
+        valid_particles = 0
+        while valid_particles < self.n_particles:
+            for i in range(len(limits) // 2):
+                s[:, i] = np.random.uniform(limits[2*i], limits[2*i+1])
+            valid_particles = self.particles.init_from_distribution(s, valid_particles, self.world_grid)
+
+
+    def initialize_particles_gaussian(self, mean_vector, standard_deviation_vector, world_grid = None):
         """
         Initialize particle filter using a Gaussian distribution with dimension three: x, y, heading. Only standard
         deviations can be provided hence the covariances are all assumed zero.
@@ -195,8 +204,13 @@ class ParticleFilter:
             print("Means and state deviation vectors have incorrect length in initialize_particles_gaussian()")
             return False
 
-        # Initialize particles with uniform weight distribution
-        self.particles.init_gaussian(mean_vector, standard_deviation_vector)
+        if world_grid is not None:
+            self.world_grid = world_grid
+
+        valid_particles = 0
+        while valid_particles < self.n_particles:
+            s = np.random.normal(mean_vector, standard_deviation_vector, (self.n_particles, self.state_dimension) )
+            valid_particles = self.particles.init_from_distribution(s, valid_particles, self.world_grid)
 
     def validate_state(self, state):
         """
@@ -298,7 +312,7 @@ class ParticleFilter:
 
         self.particles.update(states, weights)
 
-    def propagate_samples(self, samples, forward_motion, angular_motion):
+    def propagate_samples(self, states, forward_motion, angular_motion):
         """
         Propagate all samples with a simple motion model that assumes the robot rotates angular_motion rad and then moves
         forward_motion meters in the direction of its heading. Return the propagated samples (leave input unchanged).
@@ -308,12 +322,14 @@ class ParticleFilter:
         :param angular_motion: Angular motion in radians
         :return: propagated samples
         """
-        samples[:,2] += np.random.normal(angular_motion, self.process_noise[1], self.n_particles)
-        forward_displacement = np.random.normal(forward_motion, self.process_noise[0], self.n_particles)
-        samples[:,0] += forward_displacement * np.cos(samples[:,2])
-        samples[:,1] += forward_displacement * np.sin(samples[:,2])
-        #return self.validate_state(propagated_sample)
-        return samples
+        valid_particles = 0
+        while valid_particles < self.n_particles:
+            states[:,2] += np.random.normal(angular_motion, self.process_noise[1], self.n_particles)
+            forward_displacement = np.random.normal(forward_motion, self.process_noise[0], self.n_particles)
+            states[:,0] += forward_displacement * np.cos(states[:,2])
+            states[:,1] += forward_displacement * np.sin(states[:,2])
+            valid_particles = self.particles.init_from_distribution(states, valid_particles, self.world_grid)
+        return self.particles.get_states()
 
 
     def compute_likelihood(self, sample, measurement, landmarks):

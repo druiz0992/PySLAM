@@ -2,8 +2,17 @@ import numpy as np
 import cv2
 
 class WorldObject:
+    """
+    A 2D object in the world.
+    
+    Attributes:
+    - vertices: List of 2D vertices defining the object
+    - bounding_box: Bounding box of the object
 
-    def __init__(self, vertices, rotation):
+
+    """
+
+    def __init__(self, vertices, rotation, traslation = [0,0]):
         """
         Initialize the world object with given vertices and rotation.
 
@@ -11,10 +20,15 @@ class WorldObject:
         :param rotation: Rotation of the object (rad)
         """
         rotation_matrix = cv2.getRotationMatrix2D((0, 0), np.degrees(rotation), 1)
-        self.vertices = cv2.transform(np.array([vertices]), rotation_matrix)[0]
-        self.bounding_box = np.array(self.vertices, dtype=np.int32)
+        self.vertices = cv2.transform(np.array([vertices], dtype=np.float32), rotation_matrix)[0]
+        self.vertices = self.vertices + traslation
+        self.vertices.flags.writeable = False
 
-    def get_bounding_box(self):
+        # Bounding box is a convex polygon. It is used to check for collision and containment
+        self.bounding_box = np.array(self.vertices, dtype=np.int32)
+        self.bounding_box.flags.writeable = False
+
+    def bounding_box_as_array(self):
         """
         Return the bounding box of the object.
 
@@ -22,7 +36,7 @@ class WorldObject:
         """
         return self.bounding_box
 
-    def get_vertices(self):
+    def vertices_as_array(self):
         """
         Return the vertices of the object.
 
@@ -30,7 +44,7 @@ class WorldObject:
         """
         return self.vertices
     
-    def get_center(self):
+    def center(self):
         """
         Return the center of the object.
 
@@ -45,7 +59,7 @@ class WorldObject:
         :param other: Other object to check for collision
         :return: True if the objects collide, False otherwise
         """
-        return cv2.intersectConvexConvex(self.get_bounding_box(), other.get_bounding_box())[0] > 1e-8
+        return cv2.intersectConvexConvex(self.bounding_box_as_array(), other.bounding_box_as_array())[0] > 1e-8
     
     def contains_point(self, point):
         """
@@ -54,7 +68,7 @@ class WorldObject:
         :param point: 2D point to check
         :return: True if the point is inside the object, False otherwise
         """
-        return cv2.pointPolygonTest(self.get_bounding_box(), point, False) >= 0
+        return cv2.pointPolygonTest(self.bounding_box_as_array(), point, False) >= 0
     
     
     @staticmethod
@@ -74,7 +88,7 @@ class WorldObject:
             [-half_size, -half_size],
             [half_size, -half_size]
         ])
-        return WorldObject(vertices + center, rotation)
+        return WorldObject(vertices, rotation, center)
     
     @staticmethod
     def circle(center, radius):
@@ -106,7 +120,7 @@ class WorldObject:
             [-half_width, -half_height],
             [half_width, -half_height]
         ])
-        return WorldObject(vertices + center, rotation)
+        return WorldObject(vertices, rotation, center)
     
     @staticmethod
     def triangle(center, size, rotation):
@@ -123,7 +137,7 @@ class WorldObject:
             [size * np.sqrt(3) / 2, -size / 2],
             [-size * np.sqrt(3) / 2, -size / 2]
         ])
-        return WorldObject(vertices + center, rotation)
+        return WorldObject(vertices, rotation, center)
     
 
     @staticmethod
@@ -137,7 +151,7 @@ class WorldObject:
         return WorldObject(vertices, 0)
     
     @staticmethod
-    def random_polygon(center, size, num_vertices):
+    def random_polygon(num_vertices):
         """
         Create a random polygon object.
 
@@ -146,7 +160,7 @@ class WorldObject:
         :param num_vertices: Number of vertices of the polygon
         :return: WorldObject representing the random polygon
         """
-        return WorldObject(np.random.rand(num_vertices, 2) * size + center, 0)
+        return WorldObject(np.random.rand(num_vertices, 2), 0)
 
 
     
