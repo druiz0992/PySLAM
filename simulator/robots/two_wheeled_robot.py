@@ -1,6 +1,7 @@
 import numpy as np
 
 from .robot import *
+from simulator.utils import get_gaussian_noise_sample
 
 
 class TwoWheeledRobot(Robot):
@@ -19,9 +20,9 @@ class TwoWheeledRobot(Robot):
         self.std_rpm = robot_noise_params['std_rpm']
 
         ## Initialize fixed robot noise parameters
-        self.std_wheelL_diameter = self._get_gaussian_noise_sample(0, robot_noise_params['std_wheel_diameter'])[0]
-        self.std_wheelR_diameter = self._get_gaussian_noise_sample(0, robot_noise_params['std_wheel_diameter'])[0]
-        self.std_wheel_distance = self._get_gaussian_noise_sample(0, robot_noise_params['std_wheel_distance'])[0]
+        self.std_wheelL_diameter = get_gaussian_noise_sample(0, robot_noise_params['std_wheel_diameter'])[0]
+        self.std_wheelR_diameter = get_gaussian_noise_sample(0, robot_noise_params['std_wheel_diameter'])[0]
+        self.std_wheel_distance = get_gaussian_noise_sample(0, robot_noise_params['std_wheel_distance'])[0]
 
         # Unpack robot paiameters
         self.wheel_distance = robot_params['wheel_distance'] 
@@ -45,8 +46,8 @@ class TwoWheeledRobot(Robot):
         desired_Lrpm, desired_Rrpm = desired_motion
 
         # Compute actual motion including noise
-        Lrpm = desired_Lrpm + self._get_gaussian_noise_sample(0, self.std_rpm)[0]
-        Rrpm = desired_Rrpm + self._get_gaussian_noise_sample(0, self.std_rpm)[0]
+        Lrpm = desired_Lrpm + get_gaussian_noise_sample(0, self.std_rpm)[0]
+        Rrpm = desired_Rrpm + get_gaussian_noise_sample(0, self.std_rpm)[0]
 
         minutes_lapse = (timestamp - self.timestamp) / 60.0 
         Ldistance = (Lrpm * np.pi * (self.wheelL_diameter + self.std_wheelL_diameter)) * minutes_lapse 
@@ -79,7 +80,8 @@ class TwoWheeledRobot(Robot):
         self.theta_raw = np.mod(self.theta_raw, 2*np.pi)
 
         # store trajectory
-        self.trajectory.append([self.x, self.y, self.theta, self.x_raw, self.y_raw, self.theta_raw, timestamp])
+        print("MOVE")
+        self.trajectory.store([self.x, self.y, self.theta], [self.x_raw, self.y_raw, self.theta_raw,], None, timestamp)
 
         self.timestamp = timestamp
 
@@ -104,12 +106,12 @@ class TwoWheeledRobot(Robot):
         dy = self.y - landmarks[:, self.Y_POSE_IDX]
 
         distances = np.sqrt(dx**2 + dy**2)
-        z_distances = self._get_gaussian_noise_sample(distances, self.std_meas_distance)
+        z_distances = get_gaussian_noise_sample(distances, self.std_meas_distance)
 
         z_angles = np.zeros_like(distances)
         if not skip_angle_measurement:
            angles = np.arctan2(dy, dx)
-           z_angles = self._get_gaussian_noise_sample(angles, self.std_meas_angle)
+           z_angles = get_gaussian_noise_sample(angles, self.std_meas_angle)
      
         measurements = np.array([z_distances, z_angles]).T
 

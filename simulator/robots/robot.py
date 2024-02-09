@@ -1,16 +1,52 @@
 import numpy as np
 from abc import ABC, abstractmethod
 
+class Trajectory:
+    """
+    Trajectory class. Stores robot trajectory.
+        self.trajectory.append([self.x, self.y, self.theta, self.x_raw, self.y_raw, self.theta_raw, self.timestamp, self.x_est, self.y_est, self.theta_est])
+    """
+    TRAJECTORY_POSE_IDX = 0
+    TRAJECTORY_RAW_POSE_IDX = 3
+    TRAJECTORY_TIMESTAMP_IDX = 6
+    TRAJECTORY_ESTIMATED_POSE_IDX = 7
+
+    def __init__(self):
+        self.trajectory = []
+
+    def clear(self):
+        self.trajectory = []
+
+    def store(self, real_pose, raw_pose, estimated_pose, timestamp):
+        if estimated_pose is not None:
+            self.trajectory.append([*real_pose, *raw_pose, timestamp, *estimated_pose])
+        else:
+            self.trajectory.append([*real_pose, *raw_pose, timestamp])
+        print(self.trajectory[-1])
+        input()
+
+    def store_estimated_pose(self, estimated_pose):
+        self.trajectory[-1].extend(estimated_pose)
+        print("ESTORE STIMATED")
+        print(self.trajectory[-1])
+        input()
+    
+    def get_trajectory(self):
+        return np.array(self.trajectory)
+    
+    def get_last_two(self):
+        return self.trajectory[-2:]
+    
+    def length(self):
+        return len(self.trajectory)
+    
+
 class Robot(ABC):
 
     X_POSE_IDX = 0
     Y_POSE_IDX = 1
     THETA_POSE_IDX = 2
 
-    TRAJECTORY_POSE_IDX = 0
-    TRAJECTORY_RAW_POSE_IDX = 3
-    TRAJECTORY_TIMESTAMP_IDX = 6
-    TRAJECTORY_ESTIMATED_POSE_IDX = 7
 
     def __init__(self, robot_pose, robot_params, robot_noise_params):
         """
@@ -38,15 +74,21 @@ class Robot(ABC):
         self.std_meas_angle = std_meas_angle
 
 
-        self.trajectory = []
-        self.trajectory.append([self.x, self.y, self.theta, self.x_raw, self.y_raw, self.theta_raw, self.timestamp, self.x_est, self.y_est, self.theta_est])
+        self.trajectory = Trajectory()
+        print("ROBOT INIT")
+        self.trajectory.store(
+            [self.x, self.y, self.theta],
+            [self.x_raw, self.y_raw, self.theta_raw],
+            [self.x_est, self.y_est, self.theta_est],
+            self.timestamp
+        )
 
         # World grid
         self.world_grid = None
         self.x_world_size, self.y_world_size = robot_params['world_size']
 
     def get_trajectory(self):
-        return np.array(self.trajectory)
+        return self.trajectory.get_trajectory()
     
     def get_raw_pose(self):
         return [self.x_raw, self.y_raw, self.theta_raw]
@@ -58,8 +100,15 @@ class Robot(ABC):
         self.x_raw = pose[self.X_POSE_IDX]
         self.y_raw = pose[self.Y_POSE_IDX]
         self.theta_raw = pose[self.THETA_POSE_IDX]
-        self.trajectory[-1][self.TRAJECTORY_RAW_POSE_IDX:self.TRAJECTORY_TIMESTAMP_IDX] = pose
-        self.trajectory[-1][self.TRAJECTORY_ESTIMATED_POSE_IDX:] = pose
+
+        self.trajectory.clear()
+        print("INIT POSE")
+        self.trajectory.store(
+            [self.x, self.y, self.theta],
+            [self.x_raw, self.y_raw, self.theta_raw],
+            [self.x_est, self.y_est, self.theta_est],
+            self.timestamp
+        )
 
     def get_pose(self):
         return np.array([self.x, self.y, self.theta])
@@ -67,27 +116,28 @@ class Robot(ABC):
     def get_estimated_pose(self):
         return [self.x_est, self.y_est, self.theta_est]
     
-    def get_prev_raw_pose(self):
-        return self.trajectory[-2][self.TRAJECTORY_RAW_POSE_IDX:self.TRAJECTORY_TIMESTAMP_IDX]
-  
     def get_raw_incremental_movement(self):
-        return [np.sqrt(
-                  (self.x_raw - self.trajectory[-2][self.TRAJECTORY_RAW_POSE_IDX])**2 + \
-                  (self.y_raw - self.trajectory[-2][self.TRAJECTORY_RAW_POSE_IDX+self.Y_POSE_IDX])**2
+        trajectory = self.trajectory.get_last_two()
+        try:
+           return [np.sqrt(
+                  (self.x_raw - trajectory[Trajectory.TRAJECTORY_RAW_POSE_IDX])**2 + \
+                  (self.y_raw - trajectory[Trajectory.TRAJECTORY_RAW_POSE_IDX+self.Y_POSE_IDX])**2
                   ),
-                self.theta_raw - self.trajectory[-2][self.TRAJECTORY_RAW_POSE_IDX+self.THETA_POSE_IDX]]
+                self.theta_raw - trajectory[Trajectory.TRAJECTORY_RAW_POSE_IDX+self.THETA_POSE_IDX]]
+        except:
+            return np.array([0., 0.])
     
     def measure_error(self):
         error = 0.0
-        for sample in self.trajectory:
+        for sample in self.trajectory.get_trajectory():
             error += \
-                (sample[self.TRAJECTORY_POSE_IDX + self.X_POSE_IDX] -
-                     sample[self.TRAJECTORY_ESTIMATED_POSE_IDX + self.X_POSE_IDX])**2 + \
-                (sample[self.TRAJECTORY_POSE_IDX + self.Y_POSE_IDX] - 
-                     sample[self.TRAJECTORY_ESTIMATED_POSE_IDX + self.Y_POSE_IDX])**2 + \
-                (sample[self.TRAJECTORY_POSE_IDX + self.THETA_POSE_IDX] - 
-                     sample[self.TRAJECTORY_ESTIMATED_POSE_IDX + self.THETA_POSE_IDX])**2
-        error =  np.sqrt(error) / len(self.trajectory)
+                (sample[Trajectory.TRAJECTORY_POSE_IDX + self.X_POSE_IDX] -
+                     sample[Trajectory.TRAJECTORY_ESTIMATED_POSE_IDX + self.X_POSE_IDX])**2 + \
+                (sample[Trajectory.TRAJECTORY_POSE_IDX + self.Y_POSE_IDX] - 
+                     sample[Trajectory.TRAJECTORY_ESTIMATED_POSE_IDX + self.Y_POSE_IDX])**2 + \
+                (sample[Trajectory.TRAJECTORY_POSE_IDX + self.THETA_POSE_IDX] - 
+                     sample[Trajectory.TRAJECTORY_ESTIMATED_POSE_IDX + self.THETA_POSE_IDX])**2
+        error =  np.sqrt(error) / self.trajectory.length()
         return error
 
     def set_estimated_pose(self, pose):
@@ -100,7 +150,7 @@ class Robot(ABC):
         self.y_est = pose[self.Y_POSE_IDX]
         self.theta_est = pose[self.THETA_POSE_IDX]
         # append estimated pose to last trajectory sample
-        self.trajectory[-1].extend([self.x_est, self.y_est, self.theta_est])
+        self.trajectory.store_estimated_pose([self.x_est, self.y_est, self.theta_est])
 
 
     def initialize_grid(self, grid, update_pose_if_collision=False):
@@ -151,14 +201,3 @@ class Robot(ABC):
         pass
 
     
-    @staticmethod
-    def _get_gaussian_noise_sample(mu, sigma):
-        """
-        Get a random sample from a 1D Gaussian distribution with mean mu and standard deviation sigma.
-
-        :param mu: mean of distribution
-        :param sigma: standard deviation
-        :return: random sample from distribution with given parameters
-        """
-        size = 1 if np.isscalar(mu) else mu.shape
-        return np.random.normal(loc=mu, scale=sigma, size=size)
