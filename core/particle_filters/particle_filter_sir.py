@@ -44,22 +44,26 @@ class ParticleFilterSIR(ParticleFilter):
         """
         return True
 
-    def update(self, robot_forward_motion, robot_angular_motion, measurements, landmarks):
+    def update(self, robot_forward_motion, robot_angular_motion, measurements, add_noise = True, pose = None):
         """
         Process a measurement given the measured robot displacement and resample if needed.
 
         :param robot_forward_motion: Measured forward robot motion in meters.
         :param robot_angular_motion: Measured angular robot motion in radians.
         :param measurements: Measurements.
-        :param landmarks: Landmark positions.
         """
-
         # Loop over all particles
-        particle_states = np.copy(self.get_particle_states())
+        propagated_states = np.copy(self.get_particle_states())
         particle_weights = np.copy(self.get_particle_weights())
 
-        propagated_states = self.propagate_samples(particle_states, robot_forward_motion, robot_angular_motion)
-        w = particle_weights * self.compute_likelihood(propagated_states, measurements, landmarks)
+        if pose is not None:
+            propagated_states = np.tile(np.array(pose), (self.n_particles, 1))
+
+        if add_noise:
+           propagated_states = self.propagate_samples(propagated_states, robot_forward_motion, robot_angular_motion)
+
+        w = self.compute_likelihood(propagated_states, measurements)
+        w = particle_weights * w
 
         self.update_particles(w, propagated_states)
 

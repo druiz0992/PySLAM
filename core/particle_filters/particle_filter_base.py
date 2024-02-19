@@ -23,7 +23,7 @@ class Particles:
         """
         return self.states.shape[1]
 
-    def init_from_distribution(self, old_states, valid_particles,  world_grid = None):
+    def init_from_distribution(self, old_states, valid_particles,  world_grid):
         """
         Initialize the particles using the given initialization function.
 
@@ -34,17 +34,13 @@ class Particles:
 
         # Need to generate particles until we have the correct number of valid particles, taking into account
         # the world grid
-        if world_grid is None:
-            self.states = old_states
-            return self.number_of_particles
-        else:
-            collision_particles_mask = world_grid.is_occupied(old_states[:,:2], world_coordinates=True)
-            vp = np.sum(collision_particles_mask == False)
-            elements_to_copy = min(vp,self.number_of_particles-vp_cntr)
-            tmp = old_states[collision_particles_mask == False]
-            self.states[vp_cntr:vp_cntr+elements_to_copy] = tmp[:elements_to_copy, :]
-            vp_cntr += vp
-            return vp_cntr
+        collision_particles_mask = world_grid.is_occupied(old_states[:,:2], world_coordinates=True)
+        vp = np.sum(collision_particles_mask == False)
+        elements_to_copy = min(vp,self.number_of_particles-vp_cntr)
+        tmp = old_states[collision_particles_mask == False]
+        self.states[vp_cntr:vp_cntr+elements_to_copy] = tmp[:elements_to_copy, :]
+        vp_cntr += vp
+        return vp_cntr
 
 
 
@@ -144,8 +140,18 @@ class ParticleFilter:
         self.measurement_noise = measurement_noise
 
         self.particles = Particles(self.n_particles, self.state_dimension)
+        self.consecutive_weight_normalization = 0
 
-        self.world_grid = None
+        self.world = None
+        self.sensors = []
+
+    def install_sensors(self, sensor_list):
+        """
+        Install sensors.
+
+        :param sensor_list: List with sensors
+        """
+        self.sensors = sensor_list
 
     def get_particle_states(self):
         """
@@ -171,25 +177,27 @@ class ParticleFilter:
         """
         return self.particles.get()
 
-    def initialize_particles_uniform(self, world_grid = None ):
+    def initialize_landmarks(self, landmarks):
+        self.landmarks = landmarks
+
+    def initialize_particles_uniform(self, world):
         """
         Initialize the particles uniformly over the world assuming a 3D state (x, y, heading). No arguments are required
         and function always succeeds hence no return value.
         """
-        if world_grid is not None:
-            self.world_grid = world_grid
-
+        self.world = world
         # Initialize particles with uniform weight distribution
         limits = [self.x_min, self.x_max, self.y_min, self.y_max, 0, 2 * np.pi]
         s = np.zeros((self.n_particles, self.state_dimension))
         valid_particles = 0
         while valid_particles < self.n_particles:
-            for i in range(len(limits) // 2):
-                s[:, i] = np.random.uniform(limits[2*i], limits[2*i+1])
-            valid_particles = self.particles.init_from_distribution(s, valid_particles, self.world_grid)
+            s[:,0] = np.random.uniform(limits[0], limits[1], self.n_particles)
+            s[:,1] = np.random.uniform(limits[2], limits[3], self.n_particles)
+            s[:,2] = np.random.uniform(limits[4], limits[5], self.n_particles)
+            valid_particles = self.particles.init_from_distribution(s, valid_particles, self.world.grid())
 
 
-    def initialize_particles_gaussian(self, mean_vector, standard_deviation_vector, world_grid = None):
+    def initialize_particles_gaussian(self, mean_vector, standard_deviation_vector, world):
         """
         Initialize particle filter using a Gaussian distribution with dimension three: x, y, heading. Only standard
         deviations can be provided hence the covariances are all assumed zero.
@@ -204,33 +212,11 @@ class ParticleFilter:
             print("Means and state deviation vectors have incorrect length in initialize_particles_gaussian()")
             return False
 
-        if world_grid is not None:
-            self.world_grid = world_grid
-
+        self.world = world
         valid_particles = 0
         while valid_particles < self.n_particles:
             s = np.random.normal(mean_vector, standard_deviation_vector, (self.n_particles, self.state_dimension) )
-            valid_particles = self.particles.init_from_distribution(s, valid_particles, self.world_grid)
-
-    def validate_state(self, state):
-        """
-        Validate the state. State values outide allowed ranges will be corrected for assuming a 'cyclic world'.
-
-        :param state: Input particle state.
-        :return: Validated particle state.
-        """
-
-        # Make sure state does not exceed allowed limits (cyclic world)
-        state[0] = min(max(self.x_min, state[0]), self.x_max)
-        state[1] = min(max(self.x_min, state[1]), self.y_max)
-
-        # Angle must be [-pi, pi]
-        while state[2] > np.pi:
-            state[2] -= 2 * np.pi
-        while state[2] < -np.pi:
-            state[2] += 2 * np.pi
-
-        return state
+            valid_particles = self.particles.init_from_distribution(s, valid_particles, self.world.grid())
 
     def set_particles(self, particles):
         """
@@ -255,6 +241,8 @@ class ParticleFilter:
         sum_weights = self.particles.sum_weights()
 
         # Compute weighted average
+        if sum_weights < 1e-15:
+            return [0.0, 0.0, 0.0]
         avg_x = 0.0
         avg_y = 0.0
         avg_theta = 0.0
@@ -296,6 +284,12 @@ class ParticleFilter:
 
             # Set uniform weights
             self.particles.weights = np.ones(self.n_particles) / self.n_particles
+
+            self.consecutive_weight_normalization += 1
+            if self.consecutive_weight_normalization > 50:
+                print("Too many consecutive weight normalizations")
+                self.initialize_particles_uniform(self.world)
+                self.consecutive_weight_normalization = 0
             return
 
         # Return normalized weights
@@ -328,11 +322,13 @@ class ParticleFilter:
             forward_displacement = np.random.normal(forward_motion, self.process_noise[0], self.n_particles)
             states[:,0] += forward_displacement * np.cos(states[:,2])
             states[:,1] += forward_displacement * np.sin(states[:,2])
-            valid_particles = self.particles.init_from_distribution(states, valid_particles, self.world_grid)
+            valid_particles = self.particles.init_from_distribution(states, valid_particles, self.world.grid())
+        # normalize angles to 0 - 2pi
+        states[:,2] = np.mod(states[:,2], 2 * np.pi)   
         return self.particles.get_states()
 
 
-    def compute_likelihood(self, sample, measurement, landmarks):
+    def compute_likelihood(self, sample, measurement):
         """
         Compute likelihood p(z|sample) for a specific measurement given sample state and landmarks.
 
@@ -343,39 +339,12 @@ class ParticleFilter:
         :return Likelihood
         """
 
-        # Initialize measurement likelihood
-        likelihood_sample = np.ones(self.n_particles)
+        likelihood_sample = []
+        for sensor_idx, sensor in enumerate(self.sensors):
+            likelihood_sample.append(sensor.compute_likelihood(sample, measurement[sensor_idx], self.measurement_noise))
+        
+        return np.asarray(likelihood_sample).prod(axis=0)
 
-        skip_angle = np.sum(measurement[:,1]**2) < 1e-15
-        p_z_given_x_angle = 1.0
-
-        # Loop over all landmarks for current particle
-        for i, lm in enumerate(landmarks):
-
-            # Compute expected measurement assuming the current particle state
-            dx = sample[:,0] - lm[0]
-            dy = sample[:,1] - lm[1]
-            expected_distance = np.sqrt(dx*dx + dy*dy)
-
-            if not skip_angle:
-                expected_angle = np.arctan2(dy, dx)
-                # Map difference true and expected angle measurement to probability
-                p_z_given_x_angle = \
-                    np.exp(-((expected_angle-measurement[i][1])**2)/
-                           (2 * self.measurement_noise[1]**2))
-
-            # Map difference true and expected distance measurement to probability
-            p_z_given_x_distance = \
-                np.exp(-((expected_distance-measurement[i][0])**2) /
-                       (2 * self.measurement_noise[0]**2))
-
-    
-
-            # Incorporate likelihoods current landmark
-            likelihood_sample *= p_z_given_x_distance * p_z_given_x_angle
-
-        # Return importance weight based on all landmarks
-        return likelihood_sample
 
     @abstractmethod
     def update(self, robot_forward_motion, robot_angular_motion, measurements, landmarks):

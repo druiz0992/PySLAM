@@ -1,10 +1,10 @@
 import numpy as np
 from abc import ABC, abstractmethod
+from simulator.sensors import *
 
 class Trajectory:
     """
     Trajectory class. Stores robot trajectory.
-        self.trajectory.append([self.x, self.y, self.theta, self.x_raw, self.y_raw, self.theta_raw, self.timestamp, self.x_est, self.y_est, self.theta_est])
     """
     TRAJECTORY_POSE_IDX = 0
     TRAJECTORY_RAW_POSE_IDX = 3
@@ -22,20 +22,15 @@ class Trajectory:
             self.trajectory.append([*real_pose, *raw_pose, timestamp, *estimated_pose])
         else:
             self.trajectory.append([*real_pose, *raw_pose, timestamp])
-        print(self.trajectory[-1])
-        input()
 
     def store_estimated_pose(self, estimated_pose):
         self.trajectory[-1].extend(estimated_pose)
-        print("ESTORE STIMATED")
-        print(self.trajectory[-1])
-        input()
     
     def get_trajectory(self):
         return np.array(self.trajectory)
     
-    def get_last_two(self):
-        return self.trajectory[-2:]
+    def get_last(self):
+        return self.trajectory[-2]
     
     def length(self):
         return len(self.trajectory)
@@ -48,7 +43,7 @@ class Robot(ABC):
     THETA_POSE_IDX = 2
 
 
-    def __init__(self, robot_pose, robot_params, robot_noise_params):
+    def __init__(self, robot_pose, robot_params, robot_noise_params, sensor_params):
         """
         Initialize the robot with given 2D pose. In addition set motion uncertainty parameters.
 
@@ -68,6 +63,7 @@ class Robot(ABC):
         self.x = self.x_raw = self.x_est = robot_pose[self.X_POSE_IDX]
         self.y = self.y_raw = self.y_est =  robot_pose[self.Y_POSE_IDX]
         self.theta = self.theta_raw = self.theta_est = robot_pose[self.THETA_POSE_IDX]
+        self.prev_theta = self.theta
 
         # Set standard deviation measurements
         self.std_meas_distance = std_meas_distance
@@ -75,7 +71,6 @@ class Robot(ABC):
 
 
         self.trajectory = Trajectory()
-        print("ROBOT INIT")
         self.trajectory.store(
             [self.x, self.y, self.theta],
             [self.x_raw, self.y_raw, self.theta_raw],
@@ -84,8 +79,17 @@ class Robot(ABC):
         )
 
         # World grid
-        self.world_grid = None
+        self.world = None
         self.x_world_size, self.y_world_size = robot_params['world_size']
+
+        self.sensors = []
+        self.sensor_params = sensor_params
+
+    def init_sensors(self):
+        for sensor in self.sensor_params.keys():
+            if sensor == SensorType.LIDAR:
+                self.sensors.append(Lidar(self.world, self.sensor_params[sensor]))
+
 
     def get_trajectory(self):
         return self.trajectory.get_trajectory()
@@ -102,7 +106,6 @@ class Robot(ABC):
         self.theta_raw = pose[self.THETA_POSE_IDX]
 
         self.trajectory.clear()
-        print("INIT POSE")
         self.trajectory.store(
             [self.x, self.y, self.theta],
             [self.x_raw, self.y_raw, self.theta_raw],
@@ -117,7 +120,7 @@ class Robot(ABC):
         return [self.x_est, self.y_est, self.theta_est]
     
     def get_raw_incremental_movement(self):
-        trajectory = self.trajectory.get_last_two()
+        trajectory = self.trajectory.get_last()
         try:
            return [np.sqrt(
                   (self.x_raw - trajectory[Trajectory.TRAJECTORY_RAW_POSE_IDX])**2 + \
@@ -153,7 +156,7 @@ class Robot(ABC):
         self.trajectory.store_estimated_pose([self.x_est, self.y_est, self.theta_est])
 
 
-    def initialize_grid(self, grid, update_pose_if_collision=False):
+    def initialize(self, world, update_pose_if_collision=False):
         """
         Set the grid representation of the world in which the robot operates. The grid is used to ensure that the robot
         does not move through walls.
@@ -162,17 +165,23 @@ class Robot(ABC):
         :param update_pose_if_collision: Boolean that indicates whether the robot pose should be updated if a collision
                                          is detected
         """
-        self.world_grid = grid
+        self.world = world
 
         if update_pose_if_collision:
             self.reset_pose()
     
+        self.init_sensors()
+
+    def sensors_as_list(self):
+        return self.sensors
+
     def reset_pose(self):
         """
         Reset the robot pose to a random position in the world that is not occupied by a wall.
         """
         # check that the robot is not inside a landmark. If it is, select a new starting pose and check again
-        while self.world_grid.is_occupied(self.get_pose()[:self.THETA_POSE_IDX], world_coordinates=True):
+        world_grid = self.world.grid()
+        while world_grid.is_occupied(self.get_pose()[:self.THETA_POSE_IDX], world_coordinates=True):
             self.set_initial_pose([np.random.uniform(1, self.x_world_size-2), \
                                     np.random.uniform(1, self.y_world_size-2), np.random.uniform(0, 2 * np.pi)])
     @abstractmethod

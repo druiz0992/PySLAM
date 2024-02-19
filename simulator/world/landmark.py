@@ -1,5 +1,6 @@
 import numpy as np
 from .world_object import WorldObject
+from .grid import Grid
 
 class Landmark:
     """
@@ -13,8 +14,10 @@ class Landmark:
 
     def __init__(self, world_dims):
         self.landmarks = []
+        self.landmark_collection = {}
         self.size_x = world_dims[0]
         self.size_y = world_dims[1]
+        self.landmark_grid = None
 
     def add_landmark(self, landmark, check_intersection=True):
         """
@@ -31,13 +34,45 @@ class Landmark:
                     raise ValueError('Landmark intersects another landmark')
         self.landmarks.append(landmark)
 
-    def landmarks_as_list(self):
+    def as_list(self):
         """
         Return the landmarks in the world.
 
         :return: List of landmarks
         """
         return self.landmarks
+    
+    def as_collection(self):
+        """
+        Return the landmarks in the world as a collection.
+
+        :return: Collection of landmarks
+        """
+        return self.landmark_collection
+
+    def as_grid_array(self):
+        """
+        Return the landmarks in the world as a grid.
+
+        :return: Grid of landmarks
+        """
+        return self.landmark_grid.as_array()
+
+    def as_grid(self):
+        """
+        Return the landmarks in the world as a grid.
+
+        :return: Grid of landmarks
+        """
+        return self.landmark_grid
+
+    def coordinates(self):
+        """
+        Return the coordinates of the landmarks in the world.
+
+        :return: List of coordinates of the landmarks
+        """
+        return [value for value in self.landmark_collection.values()]
 
     def add_walls(self):
         """
@@ -67,7 +102,7 @@ class Landmark:
                     landmark = WorldObject.rectangle((j, i), 1, 1, 0)
                     self.add_landmark(landmark, False)
 
-    def add_square_landmarks(self, n_landmarks, size):
+    def add_square_landmarks(self, n_landmarks, size, vertices = []):
         """
         Add square landmarks to the world.
 
@@ -76,10 +111,32 @@ class Landmark:
         """
         size_x = self.size_x
         size_y = self.size_y
-        for _ in range(n_landmarks):
+        for idx in range(n_landmarks):
             landmark = WorldObject.square((np.random.uniform(size, size_x - size), np.random.uniform(size, size_y - size)), size, 0)
+            if len(vertices) > 0:
+                landmark = WorldObject.square(vertices[idx], size, 0) 
             # Add landmark to the world. Don't check for intersection, as the landmarks are randomly placed
             self.add_landmark(landmark, False)
+
+    def create_collection(self, landmarks_list, scale, remove_walls=False):
+        """
+        Create a collection of landmarks 
+
+        """
+        start_lm_idx = 0
+        if remove_walls:
+            start_lm_idx = 4
+
+        scale_x, scale_y = scale
+        grid = np.zeros((int(self.size_y*scale_y), int(self.size_x*scale_x)), dtype=np.int32)
+
+        for idx, landmark in enumerate(landmarks_list[start_lm_idx:]):
+            # add the landmark to the collection
+            center = landmark.center()
+            self.landmark_collection[idx+1] = center
+            grid[np.arange(int(center[1]*scale_y), int((center[1]+1)*scale_y)), int(center[0]*scale_x):int((center[0]+1)*scale_x)] = idx+1
+
+        self.landmark_grid = Grid.from_array(grid, scale)
 
 
 

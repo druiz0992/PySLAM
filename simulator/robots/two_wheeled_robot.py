@@ -6,7 +6,7 @@ from simulator.utils import get_gaussian_noise_sample
 
 class TwoWheeledRobot(Robot):
 
-    def __init__(self, robot_pose, robot_params, robot_noise_params):
+    def __init__(self, robot_pose, robot_params, robot_noise_params, sensor_params=None):
         """
         Initialize the robot with given 2D pose. In addition set motion uncertainty parameters.
 
@@ -15,7 +15,7 @@ class TwoWheeledRobot(Robot):
         :param robot_noise_params: Dictionary with robot noise parameters
 
         """
-        super().__init__(robot_pose, robot_params, robot_noise_params)
+        super().__init__(robot_pose, robot_params, robot_noise_params, sensor_params)
 
         self.std_rpm = robot_noise_params['std_rpm']
 
@@ -31,6 +31,7 @@ class TwoWheeledRobot(Robot):
         self.skip_angle_measurement = robot_params['skip_angle_measurement']
 
 
+
     def move(self, desired_motion, timestamp):
         """
         Move the robot according to given arguments and within world of given dimensions. The true motion is the sum of
@@ -43,6 +44,7 @@ class TwoWheeledRobot(Robot):
         :param world: dimensions of the cyclic world in which the robot executes its motion
         """
        
+        world_grid = self.world.grid()
         desired_Lrpm, desired_Rrpm = desired_motion
 
         # Compute actual motion including noise
@@ -57,10 +59,11 @@ class TwoWheeledRobot(Robot):
 
         attempt_x = self.x + distance_driven * np.cos(self.theta)
         attempt_y = self.y + distance_driven * np.sin(self.theta)
+        self.prev_theta = self.theta
         self.theta += (Rdistance - Ldistance) / (self.wheel_distance + self.std_wheel_distance)
         self.theta = np.mod(self.theta, 2*np.pi)
 
-        if not self.world_grid.is_occupied([attempt_x, attempt_y], world_coordinates=True):
+        if not world_grid.is_occupied([attempt_x, attempt_y], world_coordinates=True):
              # Update robot pose
             self.x = attempt_x
             self.y = attempt_y
@@ -80,13 +83,13 @@ class TwoWheeledRobot(Robot):
         self.theta_raw = np.mod(self.theta_raw, 2*np.pi)
 
         # store trajectory
-        print("MOVE")
         self.trajectory.store([self.x, self.y, self.theta], [self.x_raw, self.y_raw, self.theta_raw,], None, timestamp)
 
         self.timestamp = timestamp
 
+        return self.get_raw_incremental_movement()
 
-    def measure(self, landmarks_coordinates):
+    def measure(self, timestamp, add_noise=True):
         """
         Perform a measurement. The robot is assumed to measure the distance to and angles with respect to all landmarks
         in meters and radians respectively. While doing so, the robot experiences zero mean additive Gaussian noise.
@@ -95,25 +98,9 @@ class TwoWheeledRobot(Robot):
         :return: List of measurements [distance, angle]
 
         """
-        skip_angle_measurement = self.skip_angle_measurement
-        # Loop over measurements
-        landmarks = np.array(landmarks_coordinates)
-
-        # these landmarks' measurements are in the robot's frame of reference, which means that
-        #  the robot performs some measurements and computes the distance and angle to each line of 
-        #  sight landmark
-        dx = self.x - landmarks[:, self.X_POSE_IDX]
-        dy = self.y - landmarks[:, self.Y_POSE_IDX]
-
-        distances = np.sqrt(dx**2 + dy**2)
-        z_distances = get_gaussian_noise_sample(distances, self.std_meas_distance)
-
-        z_angles = np.zeros_like(distances)
-        if not skip_angle_measurement:
-           angles = np.arctan2(dy, dx)
-           z_angles = get_gaussian_noise_sample(angles, self.std_meas_angle)
-     
-        measurements = np.array([z_distances, z_angles]).T
+        measurements = []
+        for sensor in self.sensors:
+            measurements.append(sensor.scan(self.get_pose(), add_noise))
 
         return measurements
     
