@@ -5,6 +5,7 @@ from time import sleep
 from simulator.robots import TwoWheeledRobot
 from simulator.world import World
 from simulator import sample_motion_plan
+from simulator.sensors import SensorType
 
 # Supported resampling methods (resampling algorithm enum for SIR and SIR-derived particle filters)
 from core.resampling import ResamplingAlgorithms
@@ -62,6 +63,40 @@ if __name__ == '__main__':
         'std_meas_distance': true_robot_meas_noise_distance_std,
         'std_meas_angle': true_robot_meas_noise_angle_std
     }
+    
+    ## 
+    # sensors - Gyro
+
+    gyro_params = {
+        'std_bias': 1.5, #rad/sqrt(h)
+        'mean_bias': 0.5, #rad/h
+        'std_noise': 1.5 #rad/sqrt(h)
+    }
+
+    sensor_params = {
+        'gyro': gyro_params
+    }
+
+    # LIDAR
+    lidar_params = {
+        'n_beams': 360,
+        'n_scans': 10,
+        'fov': np.pi/180, # 1 degree
+        'range': 200,
+        'beam_offset': 0.0,
+        'resolution': 0.1,
+        'std_noise': 0.2,
+        'z_hit': 1.0,
+        'z_short': 0,
+        'z_max': 0.0,
+        'z_rand': 0.0,
+        'lambda_short': 0.1,
+        'skip_angle_measurement': False,
+    }
+    sensor_params = {
+        SensorType.LIDAR: lidar_params
+    }
+    
 
     # Robot Motion plan # left rpm, right rpm, duration seconds
     robot_motion_plan = [[100, 100, 2], [100, 50, 4], [100, 100, 2], [50, 100, 4],
@@ -73,7 +108,8 @@ if __name__ == '__main__':
     # Initialize simulated robot
     robot = TwoWheeledRobot(starting_robot_pose,
                   robot_params = robot_params,
-                  robot_noise_params = robot_noise_params)
+                  robot_noise_params = robot_noise_params,
+                  sensor_params = sensor_params)
 
     ##
     # Particle filter settings
@@ -89,7 +125,7 @@ if __name__ == '__main__':
     process_noise = [motion_model_forward_std, motion_model_turn_std]
 
     # Measurement noise (zero mean additive Gaussian noise)
-    meas_model_distance_std = 0.4
+    meas_model_distance_std = 2
     meas_model_angle_std = 0.3
     measurement_noise = [meas_model_distance_std, meas_model_angle_std]
 
@@ -105,7 +141,6 @@ if __name__ == '__main__':
         resampling_algorithm=algorithm,
         number_of_effective_particles_threshold=number_of_effective_particles_threshold)
 
-
     ##
     # Set simulated world and visualization properties
     ##
@@ -117,52 +152,53 @@ if __name__ == '__main__':
         'landmark_size': 7,
         'robot_arrow_length': 0.5,
     }
+
+    remove_walls_from_grid = True
+    grid_scale = [10, 10]
     world_opts = {
         'world_size': [world_size_x, world_size_y],
         'n_landmarks': n_landmarks,
-        'world_type': 'reference_landmarks', #'maze', #'reference_landmarks'
-        'grid_scale': [10,10]
+        'world_type': 'fixed_landmarks', #'maze', #'reference_landmarks'
+        'grid_scale': grid_scale,
+        'remove_walls_from_grid': remove_walls_from_grid
     }
 
+    # Create world. After creating world, landmarks are added to it, so robot and particles must be initialized
     world = World(world_opts, visualizer_opts)
 
     # Initialize grid in robot. It is used to ensure robot doesnt go through walls
-    robot.initialize_grid(world.grid(), update_pose_if_collision=True)
+    robot.initialize(world, update_pose_if_collision=True)
 
-    reference_landmarks = world.landmarks_as_list()[4:]
-    reference_landmarks_coordinates = [landmark.center() for landmark in reference_landmarks]
+    # Initialize particles randomly, but avoid placing them in occupied cells
+    particle_filter.initialize_particles_uniform(world)
+    #particle_filter.initialize_particles_gaussian(
+     #   robot.get_pose(), 
+      #  [meas_model_distance_std, meas_model_distance_std, meas_model_angle_std],
+       # world)
 
-    # Initialize particles taking into account the initial robot pose, the process noise and the world grid
-    # to prevent creating particles inside walls
-    particle_filter.initialize_particles_gaussian(
-        robot.get_pose(), 
-        [meas_model_distance_std, meas_model_distance_std, meas_model_angle_std],
-        world_grid = world.grid())
+    # install sensors in particle filter
+    particle_filter.install_sensors(robot.sensors_as_list())
 
     ##
     # Start simulation
     ##
     timestamp = 0
-    
-    for motion in true_motion_plan:
-        # Simulate robot motion (required motion will not exactly be achieved)
-        desired_Lrpm = motion[0]
-        desired_Rrpm = motion[1]
-        robot.move([desired_Lrpm, desired_Rrpm], timestamp)
 
-        raw_movement = robot.get_raw_incremental_movement()
+    for desired_rpm in true_motion_plan:
+        # update robot's motion according to motion plan
+        raw_movement = robot.move(desired_rpm, timestamp)
 
-        # Simulate measurement
-        measurements = robot.measure(reference_landmarks_coordinates)
+        # Robot measures world state
+        measurements = robot.measure(timestamp, add_noise=True)
 
         # Update SIR particle filter
         particle_filter.update(robot_forward_motion=raw_movement[0],
                                    robot_angular_motion=raw_movement[1],
                                    measurements=measurements,
-                                   landmarks=reference_landmarks_coordinates)
+                                   add_noise=True)
+                                   #pose=robot.get_pose() + [0,0,0])
         
-        estimated_pose = particle_filter.get_average_state()
-        robot.set_estimated_pose(estimated_pose)
+        robot.set_estimated_pose(particle_filter.get_average_state())
 
         # Visualization
         world.render(robot.get_pose(), particle_filter.particles, robot.get_trajectory())

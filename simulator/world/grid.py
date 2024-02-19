@@ -26,6 +26,7 @@ class Grid:
         self.grid_y = int(grid_size[1])
         self.scale_x = scale[0]
         self.scale_y = scale[1]
+        self.origin = [0, 0]  
         self.grid = np.zeros((self.grid_y, self.grid_x))
 
     def copy(self):
@@ -35,9 +36,9 @@ class Grid:
         :return: Copy of the grid
         """
         return copy.deepcopy(self.grid)
-    
+
     @staticmethod
-    def grid_from_array(array, scale):
+    def from_array(array, scale, origin=[0,0]):
         """
         Create a grid from an array.
 
@@ -54,6 +55,7 @@ class Grid:
         grid = Grid([array.shape[1], array.shape[0]], scale)
         grid.grid = np.copy(array)
         grid.grid.flags.writeable = False
+        grid.origin = origin
         return grid
 
     def build(self, landmarks):
@@ -99,6 +101,21 @@ class Grid:
         index = _point.astype(int)
         return self.grid[index[:,1], index[:,0]] > 0
 
+    def cellwise_occupied(self, other_grid):
+        """
+        Perform a cellwise AND operation with another grid.
+        """
+        if not isinstance(other_grid, Grid):
+            raise ValueError('Grid must be a Grid object')
+
+        origin_x, origin_y = other_grid.origin[0], other_grid.origin[1]
+        size_x, size_y = other_grid.size()
+        mask = Grid.from_array(
+            self.grid[int(origin_y):int(origin_y+size_y), int(origin_x):int(origin_x+size_x)] * other_grid.grid,
+            other_grid.scale(),
+            origin=other_grid.origin)
+        return mask
+
     def as_array(self):
         """
         Return the grid.
@@ -106,6 +123,11 @@ class Grid:
         :return: Grid
         """
         return self.grid
+
+    def as_ones_array(self):
+        ones_grid = np.copy(self.grid)
+        ones_grid[ones_grid > 0] = 1
+        return ones_grid
     
     def size(self):
         """
